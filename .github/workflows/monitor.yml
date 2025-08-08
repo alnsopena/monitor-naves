@@ -3,48 +3,39 @@ name: Revisar Naves DP World
 on:
   workflow_dispatch:
   schedule:
-    # Este es el planificador. Se usa para ambos jobs.
-    - cron: '*/15 * * * *' # Cada 15 minutos
-    - cron: '0 11 * * *'    # Cada día a las 11:00 UTC (6:00 AM en Perú)
+    - cron: '*/15 * * * *'
+    - cron: '0 11 * * *'
 
 jobs:
-  # JOB 1: Se ejecuta cada 15 minutos para buscar cambios
   revisar_cambios:
-    # Condición: Solo se ejecuta en el cron de 15 minutos, NO en el de las 6am
-    if: github.event.schedule == '*/15 * * * *'
-    name: Revisión de Cambios (Cada 15 min)
+    if: github.event.schedule == '*/15 * * * *' || github.event_name == 'workflow_dispatch'
+    name: Revisión de Cambios
     runs-on: ubuntu-latest
     permissions: write-all
 
     steps:
       - name: Checkout del repositorio
         uses: actions/checkout@v4
-
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas lxml html5lib beautifulsoup4
-
+          # AÑADIDO: pytz para manejar zonas horarias
+          pip install requests pandas lxml html5lib beautifulsoup4 pytz
       - name: Ejecutar el script de monitoreo
         run: python monitor_naves.py
-
       - name: Guardar los cambios en el archivo de datos
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add etb_data.json
-          # Solo hace "commit" si el archivo realmente ha cambiado
           git diff --staged --quiet || git commit -m "Actualizar datos de ETB"
           git push
 
-  # JOB 2: Se ejecuta a las 6:00 AM (hora Perú) para enviar el resumen
   enviar_resumen:
-    # Condición: Solo se ejecuta en el cron diario
     if: github.event.schedule == '0 11 * * *'
     name: Envío de Resumen Diario (6AM Perú)
     runs-on: ubuntu-latest
@@ -52,19 +43,16 @@ jobs:
     steps:
       - name: Checkout del repositorio
         uses: actions/checkout@v4
-
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas lxml html5lib beautifulsoup4
-
+          # AÑADIDO: pytz para manejar zonas horarias
+          pip install requests pandas lxml html5lib beautifulsoup4 pytz
       - name: Ejecutar script en modo resumen
-        # Le pasamos la variable de entorno para que el script sepa qué hacer
         env:
           JOB_TYPE: DAILY_SUMMARY
         run: python monitor_naves.py
