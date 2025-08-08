@@ -1,37 +1,98 @@
-name: Revisar Naves DP World
+import requests
+import pandas as pd
+import json
+import os
+from io import StringIO
+from datetime import datetime
 
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: '*/15 * * * *'
+# --- CONFIGURACIÓN ---
+URL = "https://naves.dpworldcallao.com.pe/programacion/"
+NTFY_TOPIC = "cambios-naves-zim-9w3x5z"
+DATA_FILE = "etb_data.json"
 
-jobs:
-  build:
-    # AÑADIDO: Esta línea le da permiso al bot para guardar el archivo
-    permissions: write-all
+# MEJORA 1: Define cuántas horas debe cambiar el ETB para que se considere "significativo"
+ETB_CHANGE_THRESHOLD_HOURS = 2
+
+# Lista de campos que queremos monitorear
+CAMPOS_A_MONITOREAR = ["ETB", "MANIFEST", "ATA", "ETD", "ATD"]
+
+# --- FUNCIONES AUXILIARES ---
+
+def cargar_datos_viejos():
+    """Carga los datos guardados en la última ejecución."""
+    try:
+        with open(DATA_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def guardar_datos_nuevos(data):
+    """Guarda los datos actuales para la próxima comparación."""
+    with open(DATA_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
+
+def enviar_notificacion(titulo, mensaje, tags="shipping_container"):
+    """Envía una notificación push a tu celular vía ntfy.sh."""
+    try:
+        # MEJORA 3: Se añade el header "Markdown: yes" para permitir enlaces
+        requests.post(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=mensaje.encode('utf-8'),
+            headers={
+                "Title": titulo.encode('utf-8'),
+                "Tags": tags,
+                "Markdown": "yes"
+            }
+        )
+        print(f"Notificación enviada: {titulo}")
+    except Exception as e:
+        print(f"Error al enviar notificación: {e}")
+
+def get_tracking_link(vessel_name):
+    """MEJORA 3: Crea un enlace de búsqueda en MarineTraffic para la nave."""
+    # Reemplaza espacios con %20 para que la URL funcione correctamente
+    query_name = vessel_name.replace(' ', '%20')
+    return f"https://www.marinetraffic.com/en/ais/index/search/all?keyword={query_name}"
+
+# --- LÓGICA PRINCIPAL ---
+
+def revisar_cambios():
+    """Compara los datos actuales con los viejos y notifica si hay cambios."""
+    print("Iniciando revisión de cambios en naves ZIM...")
+    datos_viejos = cargar_datos_viejos()
+    datos_nuevos = {}
     
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout del repositorio
-        uses: actions/checkout@v4
+    try:
+        df = obtener_tabla_naves()
+        if df is None: return
 
-      - name: Configurar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+        df_zim = df[df['LINE'].str.strip() == 'ZIM'].copy()
+        print(f"Se encontraron {len(df_zim)} naves de ZIM.")
 
-      - name: Instalar dependencias
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests pandas lxml html5lib beautifulsoup4
+        if df_zim.empty:
+            guardar_datos_nuevos({})
+            # Verificar si antes había naves y ahora no (todas desaparecieron)
+            if datos_viejos:
+                enviar_notificacion("Todas las naves ZIM han sido removidas", "Ya no hay naves ZIM en la programación.", tags="wastebasket")
+            return
 
-      - name: Ejecutar el script de monitoreo
-        run: python monitor_naves.py
+        # Procesar naves actuales y detectar cambios o adiciones
+        for index, nave in df_zim.iterrows():
+            nombre_nave = nave['VESSEL NAME']
+            ib_vyg = nave['I/B VYG']
+            clave_viaje = f"{nombre_nave}-{ib_vyg}"
+            
+            # Almacenar datos actuales
+            datos_nuevos[clave_viaje] = {campo: pd.Series(nave.get(campo, '---')).fillna('---').iloc[0] for campo in CAMPOS_A_MONITOREAR}
 
-      - name: Guardar los cambios en el archivo de datos
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add etb_data.json
-          git diff --staged --quiet || git commit -m "Actualizar datos de ETB"
-          git push
+            tracking_link = get_tracking_link(nombre_nave)
+            mensaje_link = f"\n\n[Rastrear en MarineTraffic]({tracking_link})"
+
+            if clave_viaje not in datos_viejos:
+                titulo = f"🚢 Nueva Nave ZIM: {nombre_nave}"
+                mensaje = f"Se añadió la nave {nombre_nave} ({ib_vyg}) a la programación." + mensaje_link
+                enviar_notificacion(titulo, mensaje, tags="heavy_plus_sign")
+            else:
+                for campo in CAMPOS_A_MONITOREAR:
+                    valor_nuevo = datos_nuevos[clave_viaje].get(campo, '---')
+                    valor_viejo = datos_viejos[clave_viaje].get(campo
