@@ -1,28 +1,29 @@
 import requests
 import pandas as pd
 import json
+import os
 from io import StringIO
 from datetime import datetime
 
 # --- CONFIGURACIÓN ---
-# La URL de la página de DP World Callao
 URL = "https://naves.dpworldcallao.com.pe/programacion/"
-
-# Tu tema de ntfy.sh. Ya está configurado.
 NTFY_TOPIC = "cambios-naves-zim-9w3x5z"
-
-# Archivo para guardar los datos y detectar cambios
 DATA_FILE = "etb_data.json"
+
+# MEJORA 1: Define cuántas horas debe cambiar el ETB para que se considere "significativo"
+ETB_CHANGE_THRESHOLD_HOURS = 2
+
+# Lista de campos que queremos monitorear
+CAMPOS_A_MONITOREAR = ["ETB", "MANIFEST", "ATA", "ETD", "ATD"]
 
 # --- FUNCIONES AUXILIARES ---
 
 def cargar_datos_viejos():
-    """Carga los datos de ETB guardados en la última ejecución."""
+    """Carga los datos guardados en la última ejecución."""
     try:
         with open(DATA_FILE, 'r') as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        # Si el archivo no existe o está vacío, devuelve un diccionario vacío.
         return {}
 
 def guardar_datos_nuevos(data):
@@ -30,84 +31,157 @@ def guardar_datos_nuevos(data):
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f, indent=4)
 
-def enviar_notificacion(titulo, mensaje):
+def enviar_notificacion(titulo, mensaje, tags="shipping_container"):
     """Envía una notificación push a tu celular vía ntfy.sh."""
     try:
+        # MEJORA 3: Se añade el header "Markdown: yes" para permitir enlaces
         requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
             data=mensaje.encode('utf-8'),
-            headers={"Title": titulo.encode('utf-8')}
+            headers={
+                "Title": titulo.encode('utf-8'),
+                "Tags": tags,
+                "Markdown": "yes"
+            }
         )
         print(f"Notificación enviada: {titulo}")
     except Exception as e:
         print(f"Error al enviar notificación: {e}")
 
-# --- LÓGICA PRINCIPAL (VERSIÓN CORREGIDA Y DEFINITIVA) ---
+def get_tracking_link(vessel_name):
+    """MEJORA 3: Crea un enlace de búsqueda en MarineTraffic para la nave."""
+    # Reemplaza espacios con %20 para que la URL funcione correctamente
+    query_name = vessel_name.replace(' ', '%20')
+    return f"https://www.marinetraffic.com/en/ais/index/search/all?keyword={query_name}"
 
-def main():
-    print("Iniciando revisión de naves ZIM...")
+# --- LÓGICA PRINCIPAL ---
+
+def revisar_cambios():
+    """Compara los datos actuales con los viejos y notifica si hay cambios."""
+    print("Iniciando revisión de cambios en naves ZIM...")
     datos_viejos = cargar_datos_viejos()
     datos_nuevos = {}
-
+    
     try:
-        # Encabezado para simular un navegador y evitar el error 403
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        # Usamos requests para obtener el HTML con el encabezado
-        response = requests.get(URL, headers=headers)
-        response.raise_for_status()  # Esto verificará si hubo errores en la solicitud
+        df = obtener_tabla_naves()
+        if df is None: return
 
-        # MODIFICACIÓN FINAL: Apuntamos directamente a la tabla usando su ID correcto "tabla-naves".
-        # Esto soluciona el error "No tables found".
-        all_tables = pd.read_html(StringIO(response.text), attrs={'id': 'tabla-naves'})
-        df = all_tables[0]
-
-        # Filtramos para obtener solo las filas de la línea "ZIM"
         df_zim = df[df['LINE'].str.strip() == 'ZIM'].copy()
         print(f"Se encontraron {len(df_zim)} naves de ZIM.")
 
         if df_zim.empty:
-            print("No se encontraron naves de ZIM en la tabla.")
             guardar_datos_nuevos({})
+            # Verificar si antes había naves y ahora no (todas desaparecieron)
+            if datos_viejos:
+                enviar_notificacion("Todas las naves ZIM han sido removidas", "Ya no hay naves ZIM en la programación.", tags="wastebasket")
             return
 
+        # Procesar naves actuales y detectar cambios o adiciones
         for index, nave in df_zim.iterrows():
-            if 'VESSEL NAME' not in nave or 'I/B VYG' not in nave or 'ETB' not in nave:
-                print(f"Advertencia: La fila {index} no tiene las columnas esperadas. Saltando.")
-                continue
-
             nombre_nave = nave['VESSEL NAME']
             ib_vyg = nave['I/B VYG']
-            etb_actual = nave['ETB']
-            
             clave_viaje = f"{nombre_nave}-{ib_vyg}"
             
-            datos_nuevos[clave_viaje] = etb_actual
+            # Almacenar datos actuales
+            datos_nuevos[clave_viaje] = {campo: pd.Series(nave.get(campo, '---')).fillna('---').iloc[0] for campo in CAMPOS_A_MONITOREAR}
 
-            etb_viejo = datos_viejos.get(clave_viaje)
+            tracking_link = get_tracking_link(nombre_nave)
+            mensaje_link = f"\n\n[Rastrear en MarineTraffic]({tracking_link})"
 
-            if etb_viejo is None:
+            if clave_viaje not in datos_viejos:
                 titulo = f"🚢 Nueva Nave ZIM: {nombre_nave}"
-                mensaje = f"Se añadió la nave {nombre_nave} ({ib_vyg}) con ETB: {etb_actual}."
-                enviar_notificacion(titulo, mensaje)
-            elif etb_viejo != etb_actual:
-                titulo = f"⚠️ ALERTA: Cambio de ETB para {nombre_nave}"
-                mensaje = f"Nave: {nombre_nave} ({ib_vyg})\nETB Anterior: {etb_viejo}\nETB Nuevo: {etb_actual}"
-                enviar_notificacion(titulo, mensaje)
+                mensaje = f"Se añadió la nave {nombre_nave} ({ib_vyg}) a la programación." + mensaje_link
+                enviar_notificacion(titulo, mensaje, tags="heavy_plus_sign")
+            else:
+                for campo in CAMPOS_A_MONITOREAR:
+                    valor_nuevo = datos_nuevos[clave_viaje].get(campo, '---')
+                    valor_viejo = datos_viejos[clave_viaje].get(campo, '---')
+                    
+                    if valor_nuevo != valor_viejo:
+                        mensaje_base = f"Campo '{campo}' ha cambiado.\nAnterior: {valor_viejo}\nNuevo: {valor_nuevo}" + mensaje_link
+                        titulo = f"⚠️ Alerta de Cambio: {nombre_nave}"
 
-    except requests.exceptions.HTTPError as http_err:
-        print(f"Error de HTTP: {http_err}")
-        enviar_notificacion("‼️ Error en Script de Naves", f"El script falló con un error de HTTP: {http_err}")
-        return
+                        # MEJORA 1: Lógica para Alertas ETB Inteligentes
+                        if campo == "ETB":
+                            try:
+                                formato_fecha = '%d-%m-%Y %H:%M:%S'
+                                fecha_vieja = datetime.strptime(valor_viejo, formato_fecha)
+                                fecha_nueva = datetime.strptime(valor_nuevo, formato_fecha)
+                                diferencia_horas = abs((fecha_nueva - fecha_vieja).total_seconds() / 3600)
+                                
+                                if diferencia_horas > ETB_CHANGE_THRESHOLD_HOURS:
+                                    titulo = f"‼️ ALERTA MAYOR: {nombre_nave}"
+                                    mensaje = f"Cambio significativo de {diferencia_horas:.1f} horas en ETB.\nAnterior: {valor_viejo}\nNuevo: {valor_nuevo}" + mensaje_link
+                                    enviar_notificacion(titulo, mensaje, tags="rotating_light")
+                                else:
+                                    print(f"Cambio menor de ETB para {nombre_nave} ignorado ({diferencia_horas:.1f} horas).")
+                            except ValueError:
+                                # Si las fechas no se pueden procesar, envía una alerta normal
+                                enviar_notificacion(titulo, mensaje_base, tags="warning")
+                        else:
+                            # Para otros campos (ATA, MANIFEST, etc.) notificar siempre
+                            enviar_notificacion(titulo, mensaje_base, tags="warning")
+
+        # MEJORA 2: Detectar naves que desaparecieron de la lista
+        naves_desaparecidas = set(datos_viejos.keys()) - set(datos_nuevos.keys())
+        for clave_viaje in naves_desaparecidas:
+            nombre_nave_desaparecida = clave_viaje.split('-')[0]
+            titulo = f"🗑️ Nave Removida: {nombre_nave_desaparecida}"
+            mensaje = f"La nave {nombre_nave_desaparecida} ha sido eliminada de la programación."
+            enviar_notificacion(titulo, mensaje, tags="wastebasket")
+            
+        guardar_datos_nuevos(datos_nuevos)
+        print("Revisión de cambios completada.")
+
     except Exception as e:
-        print(f"Error al procesar la página: {e}")
-        enviar_notificacion("‼️ Error en Script de Naves", f"El script falló con el error: {e}")
-        return
+        print(f"Error al procesar la revisión de cambios: {e}")
+        enviar_notificacion("‼️ Error en Script de Naves", f"El script falló con el error: {e}", tags="x")
 
-    guardar_datos_nuevos(datos_nuevos)
-    print("Revisión completada.")
+def enviar_resumen_diario():
+    print("Generando resumen diario...")
+    try:
+        df = obtener_tabla_naves()
+        if df is None: return
+
+        df_zim = df[df['LINE'].str.strip() == 'ZIM'].copy()
+        print(f"Se encontraron {len(df_zim)} naves para el resumen.")
+
+        if df_zim.empty:
+            enviar_notificacion("Resumen Diario de Naves", "No hay naves de ZIM en la programación de hoy.", tags="date")
+            return
+
+        mensaje_resumen = ""
+        for index, nave in df_zim.iterrows():
+            nombre_nave = nave.get('VESSEL NAME', 'N/A')
+            etb = pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0]
+            etd = pd.Series(nave.get('ETD', '---')).fillna('---').iloc[0]
+            tracking_link = get_tracking_link(nombre_nave)
+            
+            mensaje_resumen += f"\n**{nombre_nave}**\nETB: {etb}\nETD: {etd}\n[Rastrear]({tracking_link})\n"
+
+        titulo = "Resumen Diario de Naves ZIM"
+        enviar_notificacion(titulo, mensaje_resumen.strip(), tags="newspaper")
+        print("Resumen diario enviado.")
+    except Exception as e:
+        print(f"Error al enviar el resumen diario: {e}")
+        enviar_notificacion("‼️ Error en Resumen Diario", f"Falló con el error: {e}", tags="x")
+
+def obtener_tabla_naves():
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(URL, headers=headers, timeout=15)
+        response.raise_for_status()
+        
+        all_tables = pd.read_html(StringIO(response.text), attrs={'id': 'tabla-naves'})
+        return all_tables[0]
+    except Exception as e:
+        print(f"Error al obtener la tabla de la web: {e}")
+        enviar_notificacion("‼️ Error en Script de Naves", f"No se pudo descargar la tabla de DP World. Error: {e}", tags="x")
+        return None
 
 if __name__ == "__main__":
-    main()
+    job_type = os.getenv('JOB_TYPE', 'REGULAR_CHECK')
+    if job_type == 'DAILY_SUMMARY':
+        enviar_resumen_diario()
+    else:
+        revisar_cambios()
