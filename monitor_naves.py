@@ -4,7 +4,7 @@ import json
 import os
 from io import StringIO
 from datetime import datetime
-import pytz # Nueva dependencia para manejar zonas horarias
+import pytz
 
 # --- CONFIGURACIÓN ---
 URL = "https://naves.dpworldcallao.com.pe/programacion/"
@@ -31,23 +31,20 @@ def guardar_datos_nuevos(data):
 def enviar_notificacion(titulo, mensaje, tags="shipping_container"):
     """Envía una notificación push a tu celular vía ntfy.sh."""
     try:
+        # Se ha quitado el modo Markdown ya que no se envían enlaces.
         requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
             data=mensaje.encode('utf-8'),
             headers={
                 "Title": titulo.encode('utf-8'),
-                "Tags": tags,
-                "Markdown": "yes"
+                "Tags": tags
             }
         )
         print(f"Notificación enviada: {titulo}")
     except Exception as e:
         print(f"Error al enviar notificación: {e}")
 
-def get_tracking_link(vessel_name):
-    """Crea un enlace de búsqueda en MarineTraffic para la nave."""
-    query_name = vessel_name.replace(' ', '%20')
-    return f"https://www.marinetraffic.com/en/ais/index/search/all?keyword={query_name}"
+# SE ELIMINÓ la función get_tracking_link ya que no se usa.
 
 def get_lima_time():
     """Obtiene la hora actual en la zona horaria de Lima, Perú."""
@@ -81,12 +78,12 @@ def revisar_cambios():
             clave_viaje = f"{nombre_nave}-{ib_vyg}"
             
             datos_nuevos[clave_viaje] = {campo: pd.Series(nave.get(campo, '---')).fillna('---').iloc[0] for campo in CAMPOS_A_MONITOREAR}
-            tracking_link = get_tracking_link(nombre_nave)
-            mensaje_link = f"\n\n[Rastrear en MarineTraffic]({tracking_link})"
 
+            # SE ELIMINÓ la creación y adición del enlace de rastreo.
+            
             if clave_viaje not in datos_viejos:
                 titulo = f"🚢 Nueva Nave ZIM: {nombre_nave}"
-                mensaje = f"Se añadió la nave {nombre_nave} ({ib_vyg}) a la programación." + mensaje_link
+                mensaje = f"Se añadió la nave {nombre_nave} ({ib_vyg}) a la programación."
                 enviar_notificacion(titulo, mensaje, tags="heavy_plus_sign")
             else:
                 for campo in CAMPOS_A_MONITOREAR:
@@ -94,7 +91,7 @@ def revisar_cambios():
                     valor_viejo = datos_viejos[clave_viaje].get(campo, '---')
                     
                     if valor_nuevo != valor_viejo:
-                        mensaje_base = f"Campo '{campo}' ha cambiado.\nAnterior: {valor_viejo}\nNuevo: {valor_nuevo}" + mensaje_link
+                        mensaje_base = f"Campo '{campo}' ha cambiado.\nAnterior: {valor_viejo}\nNuevo: {valor_nuevo}"
                         titulo = f"⚠️ Alerta de Cambio: {nombre_nave}"
 
                         if campo == "ETB":
@@ -106,7 +103,7 @@ def revisar_cambios():
                                 
                                 if diferencia_horas > ETB_CHANGE_THRESHOLD_HOURS:
                                     titulo = f"‼️ ALERTA MAYOR: {nombre_nave}"
-                                    mensaje = f"Cambio significativo de {diferencia_horas:.1f} horas en ETB.\nAnterior: {valor_viejo}\nNuevo: {valor_nuevo}" + mensaje_link
+                                    mensaje = f"Cambio significativo de {diferencia_horas:.1f} horas en ETB.\nAnterior: {valor_viejo}\nNuevo: {valor_nuevo}"
                                     enviar_notificacion(titulo, mensaje, tags="rotating_light")
                                 else:
                                     print(f"Cambio menor de ETB para {nombre_nave} ignorado ({diferencia_horas:.1f} horas).")
@@ -147,9 +144,9 @@ def enviar_resumen_diario():
             nombre_nave = nave.get('VESSEL NAME', 'N/A')
             etb = pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0]
             etd = pd.Series(nave.get('ETD', '---')).fillna('---').iloc[0]
-            tracking_link = get_tracking_link(nombre_nave)
             
-            mensaje_resumen += f"\n**{nombre_nave}**\nETB: {etb}\nETD: {etd}\n[Rastrear]({tracking_link})\n"
+            # SE ELIMINÓ el enlace de rastreo del resumen.
+            mensaje_resumen += f"\n- {nombre_nave}:\n  ETB: {etb}\n  ETD: {etd}\n"
 
         titulo = "Resumen Diario de Naves ZIM"
         enviar_notificacion(titulo, mensaje_resumen.strip(), tags="newspaper")
@@ -168,19 +165,12 @@ def obtener_tabla_naves():
         all_tables = pd.read_html(StringIO(response.text), attrs={'id': 'tabla-naves'})
         df = all_tables[0]
 
-        # --- LÓGICA DE FILTRADO POR ATD ---
         print("Filtrando naves que ya han zarpado...")
         lima_time_now = get_lima_time()
         
-        # Convierte la columna ATD a formato de fecha, los errores se convierten en NaT (Not a Time).
         df['ATD_datetime'] = pd.to_datetime(df['ATD'], format='%d-%m-%Y %H:%M:%S', errors='coerce')
-        
-        # Asigna la zona horaria de Lima a las fechas válidas para una comparación correcta.
         df['ATD_datetime'] = df['ATD_datetime'].apply(lambda x: x.tz_localize('America/Lima', ambiguous='NaT') if pd.notnull(x) else x)
 
-        # Mantenemos solo las naves que:
-        # 1. No tienen ATD (siguen en puerto o en camino).
-        # 2. Su ATD es en el futuro (improbable, pero cubre casos extraños).
         df_filtrado = df[df['ATD_datetime'].isnull()].copy()
         
         df_filtrado.drop(columns=['ATD_datetime'], inplace=True)
