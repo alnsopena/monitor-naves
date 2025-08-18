@@ -1,34 +1,36 @@
 name: Revisar Naves DP World
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Permite ejecución manual
   schedule:
-    # Planificador de tareas:
-    - cron: '*/15 * * * *' # 1. Para la revisión de cambios cada 15 minutos.
-    - cron: '0 11 * * *'    # 2. Para el resumen de las 6:00 AM (11:00 UTC).
-    - cron: '30 22 * * *'   # 3. NUEVO: Para el resumen de las 5:30 PM (22:30 UTC).
+    - cron: '*/15 * * * *' # Se ejecuta cada 15 minutos
 
 jobs:
-  # TRABAJO 1: Revisión de cambios frecuentes
-  revisar_cambios:
-    if: github.event.schedule == '*/15 * * * *' || github.event_name == 'workflow_dispatch'
-    name: Revisión de Cambios
+  monitor_job:
+    name: Monitorear Naves
     runs-on: ubuntu-latest
     permissions: write-all
 
     steps:
       - name: Checkout del repositorio
         uses: actions/checkout@v4
+
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Instalar dependencias
+
+      - name: Instalar dependencias desde requirements.txt
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas lxml html5lib beautifulsoup4 pytz
-      - name: Ejecutar el script de monitoreo
-        run: python monitor_naves.py
+          pip install -r requirements.txt
+
+      - name: Ejecutar script principal
+        env:
+          # Pasa el secreto de forma segura al script
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python main.py
+
       - name: Guardar los cambios en el archivo de datos
         run: |
           git config --global user.name 'github-actions[bot]'
@@ -36,26 +38,3 @@ jobs:
           git add etb_data.json
           git diff --staged --quiet || git commit -m "Actualizar datos de ETB"
           git push
-
-  # TRABAJO 2: Envío de resúmenes diarios
-  enviar_resumen:
-    # MODIFICADO: Ahora se ejecuta si el cron coincide con CUALQUIERA de las dos horas programadas.
-    if: github.event.schedule == '0 11 * * *' || github.event.schedule == '30 22 * * *'
-    name: Envío de Resumen Diario
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout del repositorio
-        uses: actions/checkout@v4
-      - name: Configurar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: Instalar dependencias
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests pandas lxml html5lib beautifulsoup4 pytz
-      - name: Ejecutar script en modo resumen
-        env:
-          JOB_TYPE: DAILY_SUMMARY
-        run: python monitor_naves.py
