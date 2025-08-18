@@ -65,8 +65,7 @@ def revisar_cambios():
 
         if df_zim.empty:
             guardar_datos_nuevos({})
-            if datos_viejos:
-                enviar_notificacion("Todas las naves ZIM han sido removidas", "Ya no hay naves ZIM activas en la programación.", tags="wastebasket")
+            # Se elimina la notificación de "todas las naves removidas"
             return
 
         for index, nave in df_zim.iterrows():
@@ -107,8 +106,88 @@ def revisar_cambios():
                         else:
                             enviar_notificacion(titulo, mensaje_base, tags="warning")
 
-        naves_desaparecidas = set(datos_viejos.keys()) - set(datos_nuevos.keys())
-        for clave_viaje in naves_desaparecidas:
-            nombre_nave_desaparecida = clave_viaje.split('-')[0]
-            titulo = f"🗑️ Nave Removida: {nombre_nave_desaparecida}"
-            mensaje = f"La nave {nombre_
+        # --- SECCIÓN ELIMINADA ---
+        # Ya no se comprueba si una nave desapareció de la lista.
+        
+        guardar_datos_nuevos(datos_nuevos)
+        print("Revisión de cambios completada.")
+
+    except Exception as e:
+        print(f"Error al procesar la revisión de cambios: {e}")
+        enviar_notificacion("‼️ Error en Script de Naves", f"El script falló con el error: {e}", tags="x")
+
+def enviar_resumen_diario():
+    print("Generando resumen diario y alertas de 8 días...")
+    try:
+        df = obtener_tabla_naves()
+        if df is None: return
+
+        df_zim = df[df['LINE'].str.strip() == 'ZIM'].copy()
+        print(f"Se encontraron {len(df_zim)} naves para el resumen.")
+
+        if df_zim.empty:
+            enviar_notificacion("Resumen Diario de Naves", "No hay naves de ZIM activas en la programación de hoy.", tags="date")
+            return
+
+        lima_hoy = get_lima_time().date()
+        formato_fecha = '%d-%m-%Y %H:%M:%S'
+        mensaje_resumen = ""
+
+        for index, nave in df_zim.iterrows():
+            nombre_nave = nave.get('VESSEL NAME', 'N/A')
+            etb_str = pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0]
+            etd_str = pd.Series(nave.get('ETD', '---')).fillna('---').iloc[0]
+            
+            try:
+                if etb_str != '---':
+                    etb_date = datetime.strptime(etb_str, formato_fecha).date()
+                    diferencia_dias = (etb_date - lima_hoy).days
+                    
+                    if diferencia_dias == 8:
+                        titulo_alerta = f"🔔 Recordatorio MYC: {nombre_nave}"
+                        mensaje_alerta = f"Faltan exactamente 8 días para el ETB de la nave {nombre_nave}.\nEs momento de crearla en el sistema MYC."
+                        enviar_notificacion(titulo_alerta, mensaje_alerta, tags="bell")
+            except ValueError:
+                print(f"No se pudo procesar la fecha ETB '{etb_str}' para la nave {nombre_nave}.")
+            
+            mensaje_resumen += f"\n- {nombre_nave}:\n  ETB: {etb_str}\n  ETD: {etd_str}\n"
+
+        titulo_resumen = "Resumen Diario de Naves ZIM"
+        enviar_notificacion(titulo_resumen, mensaje_resumen.strip(), tags="newspaper")
+        print("Resumen diario enviado.")
+    except Exception as e:
+        print(f"Error al enviar el resumen diario: {e}")
+        enviar_notificacion("‼️ Error en Resumen Diario", f"Falló con el error: {e}", tags="x")
+
+def obtener_tabla_naves():
+    """Descarga, filtra por ATD y devuelve la tabla de naves como un DataFrame."""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(URL, headers=headers, timeout=15)
+        response.raise_for_status()
+        
+        all_tables = pd.read_html(StringIO(response.text), attrs={'id': 'tabla-naves'})
+        df = all_tables[0]
+
+        print("Filtrando naves que ya han zarpado...")
+        lima_time_now = get_lima_time()
+        
+        df['ATD_datetime'] = pd.to_datetime(df['ATD'], format='%d-%m-%Y %H:%M:%S', errors='coerce')
+        df['ATD_datetime'] = df['ATD_datetime'].apply(lambda x: x.tz_localize('America/Lima', ambiguous='NaT') if pd.notnull(x) else x)
+
+        df_filtrado = df[df['ATD_datetime'].isnull() | (df['ATD_datetime'] > lima_time_now)].copy()
+        
+        df_filtrado.drop(columns=['ATD_datetime'], inplace=True)
+        print(f"Naves en total: {len(df)}. Naves activas (sin ATD pasado): {len(df_filtrado)}.")
+        return df_filtrado
+    except Exception as e:
+        print(f"Error al obtener la tabla de la web: {e}")
+        enviar_notificacion("‼️ Error en Script de Naves", f"No se pudo descargar la tabla de DP World. Error: {e}", tags="x")
+        return None
+
+if __name__ == "__main__":
+    job_type = os.getenv('JOB_TYPE', 'REGULAR_CHECK')
+    if job_type == 'DAILY_SUMMARY':
+        enviar_resumen_diario()
+    else:
+        revisar_cambios()
