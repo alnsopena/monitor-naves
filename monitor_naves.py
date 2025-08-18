@@ -31,7 +31,6 @@ def guardar_datos_nuevos(data):
 def enviar_notificacion(titulo, mensaje, tags="shipping_container"):
     """Envía una notificación push a tu celular vía ntfy.sh."""
     try:
-        # Se ha quitado el modo Markdown ya que no se envían enlaces.
         requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
             data=mensaje.encode('utf-8'),
@@ -43,8 +42,6 @@ def enviar_notificacion(titulo, mensaje, tags="shipping_container"):
         print(f"Notificación enviada: {titulo}")
     except Exception as e:
         print(f"Error al enviar notificación: {e}")
-
-# SE ELIMINÓ la función get_tracking_link ya que no se usa.
 
 def get_lima_time():
     """Obtiene la hora actual en la zona horaria de Lima, Perú."""
@@ -78,8 +75,6 @@ def revisar_cambios():
             clave_viaje = f"{nombre_nave}-{ib_vyg}"
             
             datos_nuevos[clave_viaje] = {campo: pd.Series(nave.get(campo, '---')).fillna('---').iloc[0] for campo in CAMPOS_A_MONITOREAR}
-
-            # SE ELIMINÓ la creación y adición del enlace de rastreo.
             
             if clave_viaje not in datos_viejos:
                 titulo = f"🚢 Nueva Nave ZIM: {nombre_nave}"
@@ -116,75 +111,4 @@ def revisar_cambios():
         for clave_viaje in naves_desaparecidas:
             nombre_nave_desaparecida = clave_viaje.split('-')[0]
             titulo = f"🗑️ Nave Removida: {nombre_nave_desaparecida}"
-            mensaje = f"La nave {nombre_nave_desaparecida} ha sido eliminada de la programación (o ya zarpó)."
-            enviar_notificacion(titulo, mensaje, tags="wastebasket")
-            
-        guardar_datos_nuevos(datos_nuevos)
-        print("Revisión de cambios completada.")
-
-    except Exception as e:
-        print(f"Error al procesar la revisión de cambios: {e}")
-        enviar_notificacion("‼️ Error en Script de Naves", f"El script falló con el error: {e}", tags="x")
-
-def enviar_resumen_diario():
-    print("Generando resumen diario...")
-    try:
-        df = obtener_tabla_naves()
-        if df is None: return
-
-        df_zim = df[df['LINE'].str.strip() == 'ZIM'].copy()
-        print(f"Se encontraron {len(df_zim)} naves para el resumen.")
-
-        if df_zim.empty:
-            enviar_notificacion("Resumen Diario de Naves", "No hay naves de ZIM activas en la programación de hoy.", tags="date")
-            return
-
-        mensaje_resumen = ""
-        for index, nave in df_zim.iterrows():
-            nombre_nave = nave.get('VESSEL NAME', 'N/A')
-            etb = pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0]
-            etd = pd.Series(nave.get('ETD', '---')).fillna('---').iloc[0]
-            
-            # SE ELIMINÓ el enlace de rastreo del resumen.
-            mensaje_resumen += f"\n- {nombre_nave}:\n  ETB: {etb}\n  ETD: {etd}\n"
-
-        titulo = "Resumen Diario de Naves ZIM"
-        enviar_notificacion(titulo, mensaje_resumen.strip(), tags="newspaper")
-        print("Resumen diario enviado.")
-    except Exception as e:
-        print(f"Error al enviar el resumen diario: {e}")
-        enviar_notificacion("‼️ Error en Resumen Diario", f"Falló con el error: {e}", tags="x")
-
-def obtener_tabla_naves():
-    """Descarga, filtra por ATD y devuelve la tabla de naves como un DataFrame."""
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        response = requests.get(URL, headers=headers, timeout=15)
-        response.raise_for_status()
-        
-        all_tables = pd.read_html(StringIO(response.text), attrs={'id': 'tabla-naves'})
-        df = all_tables[0]
-
-        print("Filtrando naves que ya han zarpado...")
-        lima_time_now = get_lima_time()
-        
-        df['ATD_datetime'] = pd.to_datetime(df['ATD'], format='%d-%m-%Y %H:%M:%S', errors='coerce')
-        df['ATD_datetime'] = df['ATD_datetime'].apply(lambda x: x.tz_localize('America/Lima', ambiguous='NaT') if pd.notnull(x) else x)
-
-        df_filtrado = df[df['ATD_datetime'].isnull()].copy()
-        
-        df_filtrado.drop(columns=['ATD_datetime'], inplace=True)
-        print(f"Naves en total: {len(df)}. Naves activas (sin ATD): {len(df_filtrado)}.")
-        return df_filtrado
-
-    except Exception as e:
-        print(f"Error al obtener la tabla de la web: {e}")
-        enviar_notificacion("‼️ Error en Script de Naves", f"No se pudo descargar la tabla de DP World. Error: {e}", tags="x")
-        return None
-
-if __name__ == "__main__":
-    job_type = os.getenv('JOB_TYPE', 'REGULAR_CHECK')
-    if job_type == 'DAILY_SUMMARY':
-        enviar_resumen_diario()
-    else:
-        revisar_cambios()
+            mensaje = f"La nave {nombre_
