@@ -46,7 +46,6 @@ def revisar_cambios():
     for _, nave in df_zim.iterrows():
         nombre_nave = nave['VESSEL NAME']
         ib_vyg = nave['I/B VYG']
-        # MODIFICADO: Se crea un identificador único para usar en todas las notificaciones
         identificador_nave = f"{nombre_nave} {ib_vyg}".strip()
         clave_viaje = f"{nombre_nave}-{ib_vyg}"
         
@@ -116,7 +115,6 @@ def enviar_resumen_diario():
     for _, nave in df_zim.iterrows():
         nombre_nave = nave.get('VESSEL NAME', 'N/A')
         ib_vyg = pd.Series(nave.get('I/B VYG', '')).fillna('').iloc[0]
-        # MODIFICADO: Se crea el identificador combinado
         identificador_nave = f"{nombre_nave} {ib_vyg}".strip()
 
         etb_str = pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0]
@@ -131,12 +129,17 @@ def enviar_resumen_diario():
         atd_date = parse_date(atd_str)
         ata_date = parse_date(ata_str)
 
-        if etb_date and (etb_date.date() - lima_now.date()).days == 8:
-            enviar_notificacion(f"⚠️📝 Recordatorio MYC: {identificador_nave}", f"Faltan exactamente 8 días para el ETB de la nave {identificador_nave}.\nEs momento de crearla en el sistema MYC.", tags="bell")
-
+        # --- LÓGICA DE ALERTAS DE PLAZOS (MODIFICADA) ---
         if etb_date:
-            diff_to_etb = (etb_date - lima_now).total_seconds() / 3600
-            if 47 <= diff_to_etb < 48:
+            diff_to_etb_hours = (etb_date - lima_now).total_seconds() / 3600
+            
+            # MODIFICADO: Alerta MYC (9.5 días = 228 horas)
+            # Se activa si el plazo se cumple dentro de la ventana de 15 minutos de la ejecución.
+            if 227.75 <= diff_to_etb_hours < 228:
+                enviar_notificacion(f"⚠️📝 Recordatorio MYC: {identificador_nave}", f"Faltan 9.5 días para el ETB de la nave {identificador_nave}.\nEs momento de crearla en el sistema MYC.", tags="bell")
+
+            # Alertas Aduanas (48 horas) - Precisión mejorada a 15 min.
+            if 47.75 <= diff_to_etb_hours < 48:
                 if service == 'ZCX NB':
                     enviar_notificacion(f"⚠️📝 Alerta Aduanas (USA/Canadá): {identificador_nave}", "Faltan 48 horas para el ETB. Realizar transmisión para Aduana Americana y Canadiense.", tags="customs")
                 elif service == 'ZAT':
@@ -145,16 +148,20 @@ def enviar_resumen_diario():
         cutoff_date = min(filter(None, [parse_date(dry_cutoff_str), parse_date(reefer_cutoff_str)])) if any([dry_cutoff_str != '---', reefer_cutoff_str != '---']) else None
         if cutoff_date:
             diff_to_cutoff = (cutoff_date - lima_now).total_seconds() / 3600
-            if 23 <= diff_to_cutoff < 24:
+            # Alerta Cut-Off (24 horas) - Precisión mejorada a 15 min.
+            if 23.75 <= diff_to_cutoff < 24:
                 enviar_notificacion(f"‼️🚨 Alerta de Cierre Documentario (24H): {identificador_nave}", "Faltan 24 horas para el Cut-Off. Asegúrate de procesar la matriz/correctores.", tags="bangbang")
 
         if atd_date:
             diff_from_atd = (lima_now - atd_date).total_seconds() / 3600
+            # Alertas Post-Zarpe (sin cambios, ya eran precisas)
             if 6 <= diff_from_atd < 6.25:
                 enviar_notificacion(f"⚠️📝 Recordatorio Post-Zarpe (6H): {identificador_nave}", "Han pasado 6h desde el zarpe real (ATD). Recordar enviar aviso a clientes.", tags="email")
             if 24 <= diff_from_atd < 24.25:
                 enviar_notificacion(f"⚠️📝 Recordatorio Post-Zarpe (24H): {identificador_nave}", "Han pasado 24h desde el zarpe real (ATD). Recordar cerrar BLs y dar conformidad.", tags="page_facing_up")
         
+        # --- FIN DE LA LÓGICA DE ALERTAS ---
+
         status_emoji = '🗓️'
         if atd_date and atd_date < lima_now: status_emoji = '➡️'
         elif ata_date and ata_date < lima_now: status_emoji = '⚓'
