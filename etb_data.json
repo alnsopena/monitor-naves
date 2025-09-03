@@ -28,5 +28,25 @@
         "SERVICE": "ZCX NB",
         "DRY CUTOFF": "09-09-2025 14:00:00",
         "REEFER CUTOFF": "09-09-2025 22:00:00"
+    },
+    "NAVIOS AMARILLO-60E": {
+        "ETB": "17-09-2025 02:00:00",
+        "MANIFEST": "---",
+        "ATA": "---",
+        "ETD": "18-09-2025 00:00:00",
+        "ATD": "---",
+        "SERVICE": "ZAT",
+        "DRY CUTOFF": "16-09-2025 02:00:00",
+        "REEFER CUTOFF": "16-09-2025 10:00:00"
+    },
+    "OCEANA-18N": {
+        "ETB": "17-09-2025 14:00:00",
+        "MANIFEST": "---",
+        "ATA": "---",
+        "ETD": "18-09-2025 04:00:00",
+        "ATD": "---",
+        "SERVICE": "ZCX NB",
+        "DRY CUTOFF": "16-09-2025 14:00:00",
+        "REEFER CUTOFF": "16-09-2025 22:00:00"
     }
 }
