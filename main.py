@@ -23,7 +23,7 @@ def parse_date(date_str):
         return None
 
 def generar_y_enviar_resumen(df_zim, titulo):
-    """NUEVA FUNCIÓN: Construye y envía el mensaje de resumen enriquecido."""
+    """Construye y envía el mensaje de resumen enriquecido."""
     lima_now = get_lima_time()
     mensaje_resumen = ""
     for _, nave in df_zim.iterrows():
@@ -35,22 +35,21 @@ def generar_y_enviar_resumen(df_zim, titulo):
         etd_str = pd.Series(nave.get('ETD', '---')).fillna('---').iloc[0]
         ata_str = pd.Series(nave.get('ATA', '---')).fillna('---').iloc[0]
         atd_str = pd.Series(nave.get('ATD', '---')).fillna('---').iloc[0]
+        # MODIFICADO: Se extrae el MANIFEST
+        manifest_str = pd.Series(nave.get('MANIFEST', '---')).fillna('---').iloc[0]
 
         etb_date = parse_date(etb_str)
         ata_date = parse_date(ata_str)
         atd_date = parse_date(atd_str)
 
-        status_emoji = '🗓️' # Estado por defecto: Programado
-        if atd_date and atd_date < lima_now:
-            status_emoji = '➡️' # Zarpado
-        elif ata_date and ata_date < lima_now:
-            status_emoji = '⚓' # En Puerto
-        elif etb_date and (etb_date - lima_now).total_seconds() <= 0:
-            status_emoji = '⚓' # En Puerto (Pasó la hora de ETB)
-        elif etb_date and (etb_date - lima_now).total_seconds() / 3600 <= 24:
-            status_emoji = '⏳' # Próximo a Arribar
+        status_emoji = '🗓️'
+        if atd_date and atd_date < lima_now: status_emoji = '➡️'
+        elif ata_date and ata_date < lima_now: status_emoji = '⚓'
+        elif etb_date and (etb_date - lima_now).total_seconds() <= 0: status_emoji = '⚓'
+        elif etb_date and (etb_date - lima_now).total_seconds() / 3600 <= 24: status_emoji = '⏳'
         
-        mensaje_resumen += f"\n{status_emoji} **{identificador_nave}**\n  ETB: {etb_str}\n  ETD: {etd_str}\n"
+        # MODIFICADO: Se añade el MANIFEST al mensaje del resumen
+        mensaje_resumen += f"\n{status_emoji} **{identificador_nave}**\n  Manifest: {manifest_str}\n  ETB: {etb_str}\n  ETD: {etd_str}\n"
 
     enviar_notificacion(titulo, mensaje_resumen.strip(), tags="newspaper")
     print("Resumen enviado.")
@@ -75,26 +74,25 @@ def revisar_cambios():
             json.dump({}, f)
         return
 
-    # MODIFICADO: Ahora solo detectamos si HUBO algún cambio, sin importar cuál.
     hubo_cambios = False
     datos_nuevos = {}
+    claves_nuevas = set()
 
     for _, nave in df_zim.iterrows():
         nombre_nave = nave['VESSEL NAME']
         ib_vyg = nave['I/B VYG']
         clave_viaje = f"{nombre_nave}-{ib_vyg}"
+        claves_nuevas.add(clave_viaje)
         
         datos_nuevos[clave_viaje] = {campo: pd.Series(nave.get(campo, '---')).fillna('---').iloc[0] for campo in config.CAMPOS_A_MONITORIAR}
         
-        if clave_viaje not in datos_viejos:
+        if clave_viaje not in datos_viejos or datos_nuevos[clave_viaje] != datos_viejos[clave_viaje]:
             hubo_cambios = True
-            break # Si hay una nave nueva, ya sabemos que hay cambios, no hace falta seguir.
-        else:
-            if datos_nuevos[clave_viaje] != datos_viejos[clave_viaje]:
-                hubo_cambios = True
-                break # Si cualquier campo de una nave cambia, hay cambios.
 
-    # Guardar siempre los datos nuevos para no notificar lo mismo repetidamente.
+    # Comprobar si alguna nave fue eliminada
+    if set(datos_viejos.keys()) != claves_nuevas:
+        hubo_cambios = True
+
     with open(config.DATA_FILE, 'w') as f:
         json.dump(datos_nuevos, f, indent=4)
     
@@ -113,44 +111,43 @@ def enviar_resumen_diario():
     df_zim = df[df['LINE'].str.strip() == 'ZIM'].copy()
     print(f"Se encontraron {len(df_zim)} naves para el resumen.")
 
-    # Primero, envía las alertas de plazos
     if not df_zim.empty:
         lima_now = get_lima_time()
         for _, nave in df_zim.iterrows():
-            # ... (Lógica de alertas de plazos se mantiene igual)
             nombre_nave = nave.get('VESSEL NAME', 'N/A')
             ib_vyg = pd.Series(nave.get('I/B VYG', '')).fillna('').iloc[0]
             identificador_nave = f"{nombre_nave} {ib_vyg}".strip()
             etb_str = pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0]
-            atd_str = pd.Series(nave.get('ATD', '---')).fillna('---').iloc[0]
             dry_cutoff_str = pd.Series(nave.get('DRY CUTOFF', '---')).fillna('---').iloc[0]
             reefer_cutoff_str = pd.Series(nave.get('REEFER CUTOFF', '---')).fillna('---').iloc[0]
             service = pd.Series(nave.get('SERVICE', '---')).fillna('---').iloc[0]
+            atd_str = pd.Series(nave.get('ATD', '---')).fillna('---').iloc[0]
             etb_date = parse_date(etb_str)
             atd_date = parse_date(atd_str)
 
             if etb_date:
                 diff_to_etb_hours = (etb_date - lima_now).total_seconds() / 3600
                 if 227.75 <= diff_to_etb_hours < 228:
-                    enviar_notificacion(f"⚠️📝 Recordatorio MYC: {identificador_nave}", f"Faltan 9.5 días para el ETB de la nave {identificador_nave}.\nEs momento de crearla en el sistema MYC.", tags="bell")
+                    enviar_notificacion(f"⚠️📝 Recordatorio MYC: {identificador_nave}", f"Faltan 9.5 días para el ETB.\nEs momento de crearla en el sistema MYC.", tags="bell")
                 if 47.75 <= diff_to_etb_hours < 48:
                     if service == 'ZCX NB':
-                        enviar_notificacion(f"⚠️📝 Alerta Aduanas (USA/Canadá): {identificador_nave}", "Faltan 48 horas para el ETB...", tags="customs")
+                        enviar_notificacion(f"⚠️📝 Alerta Aduanas (USA/Canadá): {identificador_nave}", "Faltan 48h para el ETB. Realizar transmisión para Aduana Americana y Canadiense.", tags="customs")
                     elif service == 'ZAT':
-                        enviar_notificacion(f"⚠️📝 Alerta Aduanas (China): {identificador_nave}", "Faltan 48 horas para el ETB...", tags="customs")
+                        enviar_notificacion(f"⚠️📝 Alerta Aduanas (China): {identificador_nave}", "Faltan 48h para el ETB. Realizar transmisión para Aduana China.", tags="customs")
+            
             cutoff_date = min(filter(None, [parse_date(dry_cutoff_str), parse_date(reefer_cutoff_str)])) if any([dry_cutoff_str != '---', reefer_cutoff_str != '---']) else None
             if cutoff_date:
                 diff_to_cutoff = (cutoff_date - lima_now).total_seconds() / 3600
                 if 23.75 <= diff_to_cutoff < 24:
-                    enviar_notificacion(f"‼️🚨 Alerta de Cierre Documentario (24H): {identificador_nave}", "Faltan 24 horas para el Cut-Off...", tags="bangbang")
+                    enviar_notificacion(f"‼️🚨 Alerta de Cierre Documentario (24H): {identificador_nave}", "Faltan 24h para el Cut-Off. Asegúrate de procesar la matriz/correctores.", tags="bangbang")
+
             if atd_date:
                 diff_from_atd = (lima_now - atd_date).total_seconds() / 3600
                 if 6 <= diff_from_atd < 6.25:
-                    enviar_notificacion(f"⚠️📝 Recordatorio Post-Zarpe (6H): {identificador_nave}", "Han pasado 6h desde el zarpe real (ATD)...", tags="email")
+                    enviar_notificacion(f"⚠️📝 Recordatorio Post-Zarpe (6H): {identificador_nave}", "Han pasado 6h desde el zarpe real (ATD). Recordar enviar aviso a clientes.", tags="email")
                 if 24 <= diff_from_atd < 24.25:
-                    enviar_notificacion(f"⚠️📝 Recordatorio Post-Zarpe (24H): {identificador_nave}", "Han pasado 24h desde el zarpe real (ATD)...", tags="page_facing_up")
+                    enviar_notificacion(f"⚠️📝 Recordatorio Post-Zarpe (24H): {identificador_nave}", "Han pasado 24h desde el zarpe real (ATD). Recordar cerrar BLs y dar conformidad.", tags="page_facing_up")
 
-    # Luego, envía el resumen general
     if not df_zim.empty:
         generar_y_enviar_resumen(df_zim, "📰 resumen Diario de Naves ZIM")
     else:
