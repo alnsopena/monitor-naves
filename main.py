@@ -1,101 +1,86 @@
 # main.py
-# Script principal que orquesta el proceso de monitoreo.
-
 import os
 import json
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 import config
 from notifier import enviar_notificacion
 from scraper import obtener_tabla_naves, get_lima_time
 
+# --- FUNCIONES DE MEMORIA DE NOTIFICACIONES ---
+def cargar_notificaciones_enviadas():
+    """Carga el registro de notificaciones de plazo ya enviadas."""
+    try:
+        with open(config.SENT_NOTIFICATIONS_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def guardar_notificaciones_enviadas(data):
+    """Guarda el registro actualizado de notificaciones enviadas."""
+    with open(config.SENT_NOTIFICATIONS_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
+# --- FIN DE FUNCIONES DE MEMORIA ---
+
 def parse_date(date_str):
-    """Convierte un string de fecha a un objeto datetime con zona horaria."""
-    if not date_str or date_str == '---':
-        return None
+    if not date_str or date_str == '---': return None
     try:
         lima_tz = pytz.timezone('America/Lima')
         dt = datetime.strptime(date_str, '%d-%m-%Y %H:%M:%S')
         return lima_tz.localize(dt)
-    except (ValueError, TypeError):
-        return None
+    except (ValueError, TypeError): return None
 
 def generar_y_enviar_resumen(df_zim, titulo):
-    """Construye y envía el mensaje de resumen enriquecido."""
     lima_now = get_lima_time()
     mensaje_resumen = ""
     for _, nave in df_zim.iterrows():
         nombre_nave = nave.get('VESSEL NAME', 'N/A')
         ib_vyg = pd.Series(nave.get('I/B VYG', '')).fillna('').iloc[0]
         identificador_nave = f"{nombre_nave} {ib_vyg}".strip()
-
         etb_str = pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0]
         etd_str = pd.Series(nave.get('ETD', '---')).fillna('---').iloc[0]
         ata_str = pd.Series(nave.get('ATA', '---')).fillna('---').iloc[0]
         atd_str = pd.Series(nave.get('ATD', '---')).fillna('---').iloc[0]
-        # MODIFICADO: Se extrae el MANIFEST
         manifest_str = pd.Series(nave.get('MANIFEST', '---')).fillna('---').iloc[0]
-
         etb_date = parse_date(etb_str)
         ata_date = parse_date(ata_str)
         atd_date = parse_date(atd_str)
-
         status_emoji = '🗓️'
         if atd_date and atd_date < lima_now: status_emoji = '➡️'
         elif ata_date and ata_date < lima_now: status_emoji = '⚓'
         elif etb_date and (etb_date - lima_now).total_seconds() <= 0: status_emoji = '⚓'
         elif etb_date and (etb_date - lima_now).total_seconds() / 3600 <= 24: status_emoji = '⏳'
-        
-        # MODIFICADO: Se añade el MANIFEST al mensaje del resumen
         mensaje_resumen += f"\n{status_emoji} **{identificador_nave}**\n  Manifest: {manifest_str}\n  ETB: {etb_str}\n  ETD: {etd_str}\n"
-
     enviar_notificacion(titulo, mensaje_resumen.strip(), tags="newspaper")
     print("Resumen enviado.")
 
 def revisar_cambios():
-    """Compara los datos actuales con los viejos y si hay cambios, envía un resumen completo."""
     print("Iniciando revisión de cambios...")
     try:
-        with open(config.DATA_FILE, 'r') as f:
-            datos_viejos = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        datos_viejos = {}
-        
+        with open(config.DATA_FILE, 'r') as f: datos_viejos = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError): datos_viejos = {}
     df = obtener_tabla_naves()
     if df is None: return
-
     df_zim = df[df['LINE'].str.strip() == 'ZIM'].copy()
     print(f"Se encontraron {len(df_zim)} naves de ZIM activas.")
-
     if df_zim.empty:
-        with open(config.DATA_FILE, 'w') as f:
-            json.dump({}, f)
+        with open(config.DATA_FILE, 'w') as f: json.dump({}, f)
         return
-
     hubo_cambios = False
     datos_nuevos = {}
     claves_nuevas = set()
-
     for _, nave in df_zim.iterrows():
         nombre_nave = nave['VESSEL NAME']
         ib_vyg = nave['I/B VYG']
         clave_viaje = f"{nombre_nave}-{ib_vyg}"
         claves_nuevas.add(clave_viaje)
-        
         datos_nuevos[clave_viaje] = {campo: pd.Series(nave.get(campo, '---')).fillna('---').iloc[0] for campo in config.CAMPOS_A_MONITORIAR}
-        
         if clave_viaje not in datos_viejos or datos_nuevos[clave_viaje] != datos_viejos[clave_viaje]:
             hubo_cambios = True
-
-    # Comprobar si alguna nave fue eliminada
-    if set(datos_viejos.keys()) != claves_nuevas:
-        hubo_cambios = True
-
-    with open(config.DATA_FILE, 'w') as f:
-        json.dump(datos_nuevos, f, indent=4)
-    
+    if set(datos_viejos.keys()) != claves_nuevas: hubo_cambios = True
+    with open(config.DATA_FILE, 'w') as f: json.dump(datos_nuevos, f, indent=4)
     if hubo_cambios:
         print("Cambios detectados. Enviando resumen actualizado...")
         generar_y_enviar_resumen(df_zim, "📰 resumen ZIM Actualizado por Cambios")
@@ -103,55 +88,73 @@ def revisar_cambios():
         print("Revisión completada. No se detectaron cambios.")
 
 def enviar_resumen_diario():
-    """Envía un resumen diario y las alertas de plazos."""
     print("Generando resumen diario y alertas de plazos...")
     df = obtener_tabla_naves()
     if df is None: return
-    
     df_zim = df[df['LINE'].str.strip() == 'ZIM'].copy()
     print(f"Se encontraron {len(df_zim)} naves para el resumen.")
-
+    
+    notificaciones_enviadas = cargar_notificaciones_enviadas()
+    
+    lima_hoy_str = get_lima_time().strftime('%Y-%m-%d')
+    claves_a_borrar = [k for k, v in notificaciones_enviadas.items() if (datetime.strptime(lima_hoy_str, '%Y-%m-%d') - datetime.strptime(v, '%Y-%m-%d')).days > 30]
+    for k in claves_a_borrar: del notificaciones_enviadas[k]
+    
     if not df_zim.empty:
         lima_now = get_lima_time()
         for _, nave in df_zim.iterrows():
             nombre_nave = nave.get('VESSEL NAME', 'N/A')
             ib_vyg = pd.Series(nave.get('I/B VYG', '')).fillna('').iloc[0]
             identificador_nave = f"{nombre_nave} {ib_vyg}".strip()
-            etb_str = pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0]
+            clave_viaje = f"{nombre_nave}-{ib_vyg}"
+            
+            etb_date = parse_date(pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0])
+            atd_date = parse_date(pd.Series(nave.get('ATD', '---')).fillna('---').iloc[0])
             dry_cutoff_str = pd.Series(nave.get('DRY CUTOFF', '---')).fillna('---').iloc[0]
             reefer_cutoff_str = pd.Series(nave.get('REEFER CUTOFF', '---')).fillna('---').iloc[0]
             service = pd.Series(nave.get('SERVICE', '---')).fillna('---').iloc[0]
-            atd_str = pd.Series(nave.get('ATD', '---')).fillna('---').iloc[0]
-            etb_date = parse_date(etb_str)
-            atd_date = parse_date(atd_str)
 
             if etb_date:
                 diff_to_etb_hours = (etb_date - lima_now).total_seconds() / 3600
-                if 227.75 <= diff_to_etb_hours < 228:
-                    enviar_notificacion(f"⚠️📝 Recordatorio MYC: {identificador_nave}", f"Faltan 9.5 días para el ETB.\nEs momento de crearla en el sistema MYC.", tags="bell")
-                if 47.75 <= diff_to_etb_hours < 48:
+                llave_myc = f"{clave_viaje}-MYC"
+                if 227.75 <= diff_to_etb_hours < 228 and llave_myc not in notificaciones_enviadas:
+                    enviar_notificacion(f"⚠️📝 Recordatorio MYC: {identificador_nave}", f"Faltan 9.5 días para el ETB.\nEs momento de crear la nave en el sistema MYC.", tags="bell")
+                    notificaciones_enviadas[llave_myc] = lima_hoy_str
+                
+                llave_aduana = f"{clave_viaje}-ADUANA"
+                if 47.75 <= diff_to_etb_hours < 48 and llave_aduana not in notificaciones_enviadas:
                     if service == 'ZCX NB':
                         enviar_notificacion(f"⚠️📝 Alerta Aduanas (USA/Canadá): {identificador_nave}", "Faltan 48h para el ETB. Realizar transmisión para Aduana Americana y Canadiense.", tags="customs")
+                        notificaciones_enviadas[llave_aduana] = lima_hoy_str
                     elif service == 'ZAT':
                         enviar_notificacion(f"⚠️📝 Alerta Aduanas (China): {identificador_nave}", "Faltan 48h para el ETB. Realizar transmisión para Aduana China.", tags="customs")
-            
+                        notificaciones_enviadas[llave_aduana] = lima_hoy_str
+
             cutoff_date = min(filter(None, [parse_date(dry_cutoff_str), parse_date(reefer_cutoff_str)])) if any([dry_cutoff_str != '---', reefer_cutoff_str != '---']) else None
             if cutoff_date:
                 diff_to_cutoff = (cutoff_date - lima_now).total_seconds() / 3600
-                if 23.75 <= diff_to_cutoff < 24:
+                llave_cutoff = f"{clave_viaje}-CUTOFF"
+                if 23.75 <= diff_to_cutoff < 24 and llave_cutoff not in notificaciones_enviadas:
                     enviar_notificacion(f"‼️🚨 Alerta de Cierre Documentario (24H): {identificador_nave}", "Faltan 24h para el Cut-Off. Asegúrate de procesar la matriz/correctores.", tags="bangbang")
-
+                    notificaciones_enviadas[llave_cutoff] = lima_hoy_str
+            
             if atd_date:
                 diff_from_atd = (lima_now - atd_date).total_seconds() / 3600
-                if 6 <= diff_from_atd < 6.25:
+                llave_zarpe6h = f"{clave_viaje}-ZARPE6H"
+                llave_zarpe24h = f"{clave_viaje}-ZARPE24H"
+                if 6 <= diff_from_atd < 6.25 and llave_zarpe6h not in notificaciones_enviadas:
                     enviar_notificacion(f"⚠️📝 Recordatorio Post-Zarpe (6H): {identificador_nave}", "Han pasado 6h desde el zarpe real (ATD). Recordar enviar aviso a clientes.", tags="email")
-                if 24 <= diff_from_atd < 24.25:
+                    notificaciones_enviadas[llave_zarpe6h] = lima_hoy_str
+                if 24 <= diff_from_atd < 24.25 and llave_zarpe24h not in notificaciones_enviadas:
                     enviar_notificacion(f"⚠️📝 Recordatorio Post-Zarpe (24H): {identificador_nave}", "Han pasado 24h desde el zarpe real (ATD). Recordar cerrar BLs y dar conformidad.", tags="page_facing_up")
-
+                    notificaciones_enviadas[llave_zarpe24h] = lima_hoy_str
+    
     if not df_zim.empty:
         generar_y_enviar_resumen(df_zim, "📰 resumen Diario de Naves ZIM")
     else:
         enviar_notificacion("📰 resumen Diario de Naves ZIM", "No hay naves de ZIM activas en la programación de hoy.", tags="newspaper")
+    
+    guardar_notificaciones_enviadas(notificaciones_enviadas)
 
 if __name__ == "__main__":
     now = get_lima_time()
@@ -163,8 +166,8 @@ if __name__ == "__main__":
         print("Ejecución manual detectada. Forzando revisión de cambios.")
     
     if is_summary_time:
-        print(f"Hora de resumen detectada ({now.strftime('%H:%M')}). Ejecutando resumen diario.")
+        print("Hora de resumen detectada. Ejecutando resumen diario.")
         enviar_resumen_diario()
     else:
-        print(f"Hora normal ({now.strftime('%H:%M')}). Ejecutando revisión de cambios.")
+        print("Hora normal. Ejecutando revisión de cambios.")
         revisar_cambios()
