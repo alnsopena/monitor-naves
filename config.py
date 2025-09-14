@@ -3,9 +3,10 @@ import os
 
 URL = "https://naves.dpworldcallao.com.pe/programacion/"
 DATA_FILE = "etb_data.json"
-
-# Archivo para registrar las notificaciones de plazo ya enviadas
 SENT_NOTIFICATIONS_FILE = "sent_notifications.json"
+
+# NUEVO: Archivo para guardar si el script está en estado de error
+ERROR_STATE_FILE = "error_state.json"
 
 ETD_FILTER_DAYS = 15
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
