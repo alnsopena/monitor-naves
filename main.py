@@ -7,24 +7,22 @@ import pytz
 
 import config
 from notifier import enviar_notificacion
-# Se quita la importación circular, scraper ya no importa desde main
 from scraper import obtener_tabla_naves, get_lima_time
 
-# --- NUEVAS FUNCIONES DE ESTADO DE ERROR ---
-def is_in_error_state():
-    """Comprueba si el script está actualmente en estado de error."""
+# --- FUNCIONES DE MEMORIA DE NOTIFICACIONES ---
+def cargar_notificaciones_enviadas():
+    """Carga el registro de notificaciones de plazo ya enviadas."""
     try:
-        with open(config.ERROR_STATE_FILE, 'r') as f:
-            state = json.load(f)
-            return state.get("in_error_state", False)
+        with open(config.SENT_NOTIFICATIONS_FILE, 'r') as f:
+            return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return False
+        return {}
 
-def set_error_state(status: bool):
-    """Establece el estado de error del script."""
-    with open(config.ERROR_STATE_FILE, 'w') as f:
-        json.dump({"in_error_state": status}, f)
-# --- FIN DE FUNCIONES DE ESTADO DE ERROR ---
+def guardar_notificaciones_enviadas(data):
+    """Guarda el registro actualizado de notificaciones enviadas."""
+    with open(config.SENT_NOTIFICATIONS_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
+# --- FIN DE FUNCIONES DE MEMORIA ---
 
 def parse_date(date_str):
     if not date_str or date_str == '---': return None
@@ -35,7 +33,6 @@ def parse_date(date_str):
     except (ValueError, TypeError): return None
 
 def generar_y_enviar_resumen(df_zim, titulo):
-    # ... (Esta función no cambia)
     lima_now = get_lima_time()
     mensaje_resumen = ""
     for _, nave in df_zim.iterrows():
@@ -62,13 +59,20 @@ def generar_y_enviar_resumen(df_zim, titulo):
 def revisar_cambios():
     print("Iniciando revisión de cambios...")
     try:
-        # ... (La lógica interna de esta función no cambia)
-        with open(config.DATA_FILE, 'r') as f: datos_viejos = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError): datos_viejos = {}
+        # --- BLOQUE CORREGIDO ---
+        try:
+            with open(config.DATA_FILE, 'r') as f:
+                datos_viejos = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            datos_viejos = {}
+        # --- FIN DEL BLOQUE CORREGIDO ---
+        
         df = obtener_tabla_naves()
         if df is None: return
+
         df_zim = df[df['LINE'].str.strip() == 'ZIM'].copy()
         print(f"Se encontraron {len(df_zim)} naves de ZIM activas.")
+        
         if df_zim.empty:
             with open(config.DATA_FILE, 'w') as f: json.dump({}, f)
         else:
@@ -91,14 +95,12 @@ def revisar_cambios():
             else:
                 print("Revisión completada. No se detectaron cambios.")
         
-        # MODIFICADO: Lógica de recuperación
         if is_in_error_state():
             set_error_state(False)
             enviar_notificacion("✅ Sistema Recuperado", "El script ha vuelto a funcionar correctamente.", tags="white_check_mark")
             
     except Exception as e:
         print(f"Error al procesar la revisión de cambios: {e}")
-        # MODIFICADO: Usa la nueva lógica de notificación de errores
         if not is_in_error_state():
             enviar_notificacion("‼️🚨 Error en Script de Naves", f"El script ha comenzado a fallar. Error: {e}", tags="x")
             set_error_state(True)
@@ -106,15 +108,18 @@ def revisar_cambios():
 def enviar_resumen_diario():
     print("Generando resumen diario y alertas de plazos...")
     try:
-        # ... (La lógica interna de esta función no cambia)
         df = obtener_tabla_naves()
         if df is None: return
+
         df_zim = df[df['LINE'].str.strip() == 'ZIM'].copy()
         print(f"Se encontraron {len(df_zim)} naves para el resumen.")
+        
         notificaciones_enviadas = cargar_notificaciones_enviadas()
+        
         lima_hoy_str = get_lima_time().strftime('%Y-%m-%d')
         claves_a_borrar = [k for k, v in notificaciones_enviadas.items() if (datetime.strptime(lima_hoy_str, '%Y-%m-%d') - datetime.strptime(v, '%Y-%m-%d')).days > 30]
         for k in claves_a_borrar: del notificaciones_enviadas[k]
+        
         if not df_zim.empty:
             lima_now = get_lima_time()
             for _, nave in df_zim.iterrows():
@@ -122,17 +127,20 @@ def enviar_resumen_diario():
                 ib_vyg = pd.Series(nave.get('I/B VYG', '')).fillna('').iloc[0]
                 identificador_nave = f"{nombre_nave} {ib_vyg}".strip()
                 clave_viaje = f"{nombre_nave}-{ib_vyg}"
+                
                 etb_date = parse_date(pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0])
                 atd_date = parse_date(pd.Series(nave.get('ATD', '---')).fillna('---').iloc[0])
                 dry_cutoff_str = pd.Series(nave.get('DRY CUTOFF', '---')).fillna('---').iloc[0]
                 reefer_cutoff_str = pd.Series(nave.get('REEFER CUTOFF', '---')).fillna('---').iloc[0]
                 service = pd.Series(nave.get('SERVICE', '---')).fillna('---').iloc[0]
+
                 if etb_date:
                     diff_to_etb_hours = (etb_date - lima_now).total_seconds() / 3600
                     llave_myc = f"{clave_viaje}-MYC"
                     if 227.75 <= diff_to_etb_hours < 228 and llave_myc not in notificaciones_enviadas:
                         enviar_notificacion(f"⚠️📝 Recordatorio MYC: {identificador_nave}", f"Faltan 9.5 días para el ETB.\nEs momento de crear la nave en el sistema MYC.", tags="bell")
                         notificaciones_enviadas[llave_myc] = lima_hoy_str
+                    
                     llave_aduana = f"{clave_viaje}-ADUANA"
                     if 47.75 <= diff_to_etb_hours < 48 and llave_aduana not in notificaciones_enviadas:
                         if service == 'ZCX NB':
@@ -141,6 +149,7 @@ def enviar_resumen_diario():
                         elif service == 'ZAT':
                             enviar_notificacion(f"⚠️📝 Alerta Aduanas (China): {identificador_nave}", "Faltan 48h para el ETB...", tags="customs")
                             notificaciones_enviadas[llave_aduana] = lima_hoy_str
+
                 cutoff_date = min(filter(None, [parse_date(dry_cutoff_str), parse_date(reefer_cutoff_str)])) if any([dry_cutoff_str != '---', reefer_cutoff_str != '---']) else None
                 if cutoff_date:
                     diff_to_cutoff = (cutoff_date - lima_now).total_seconds() / 3600
@@ -148,6 +157,7 @@ def enviar_resumen_diario():
                     if 23.75 <= diff_to_cutoff < 24 and llave_cutoff not in notificaciones_enviadas:
                         enviar_notificacion(f"‼️🚨 Alerta de Cierre Documentario (24H): {identificador_nave}", "Faltan 24h para el Cut-Off...", tags="bangbang")
                         notificaciones_enviadas[llave_cutoff] = lima_hoy_str
+                
                 if atd_date:
                     diff_from_atd = (lima_now - atd_date).total_seconds() / 3600
                     llave_zarpe6h = f"{clave_viaje}-ZARPE6H"
@@ -163,21 +173,19 @@ def enviar_resumen_diario():
             generar_y_enviar_resumen(df_zim, "📰 resumen Diario de Naves ZIM")
         else:
             enviar_notificacion("📰 resumen Diario de Naves ZIM", "No hay naves de ZIM activas en la programación de hoy.", tags="newspaper")
+        
         guardar_notificaciones_enviadas(notificaciones_enviadas)
         
-        # MODIFICADO: Lógica de recuperación
         if is_in_error_state():
             set_error_state(False)
             enviar_notificacion("✅ Sistema Recuperado", "El script ha vuelto a funcionar correctamente.", tags="white_check_mark")
 
     except Exception as e:
         print(f"Error al enviar el resumen diario: {e}")
-        # MODIFICADO: Usa la nueva lógica de notificación de errores
         if not is_in_error_state():
             enviar_notificacion("‼️🚨 Error en Resumen Diario", f"Falló con el error: {e}", tags="x")
             set_error_state(True)
 
-# --- Bloque de ejecución principal (sin cambios) ---
 if __name__ == "__main__":
     now = get_lima_time()
     is_summary_time = False
