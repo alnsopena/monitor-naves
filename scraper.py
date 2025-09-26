@@ -5,16 +5,14 @@ import pytz
 from datetime import datetime, timedelta
 from io import StringIO
 import config
-from notifier import enviar_notificacion
-# MODIFICADO: Ahora importa desde utils.py, rompiendo el círculo
+# MODIFICADO: Importa la función específica de ntfy
+from notifier import enviar_a_ntfy
 from utils import is_in_error_state, set_error_state
 
 def get_lima_time():
-    """Obtiene la hora actual en la zona horaria de Lima, Perú."""
     return datetime.now(pytz.timezone('America/Lima'))
 
 def obtener_tabla_naves():
-    """Descarga, filtra por ATD y ETD, y devuelve la tabla de naves."""
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
         response = requests.get(config.URL, headers=headers, timeout=15)
@@ -46,6 +44,7 @@ def obtener_tabla_naves():
     except Exception as e:
         print(f"Error al obtener la tabla de la web: {e}")
         if not is_in_error_state():
-            enviar_notificacion("‼️🚨 Error en Script de Naves", f"El script ha comenzado a fallar al obtener datos de DP World. Error: {e}", tags="x")
+            # MODIFICADO: Envía errores solo a ntfy
+            enviar_a_ntfy("‼️🚨 Error en Script de Naves", f"El script ha comenzado a fallar al obtener datos de DP World. Error: {e}", tags="x")
             set_error_state(True)
         return None
