@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 from io import StringIO
 import config
 from notifier import enviar_notificacion
-# Se importa el helper del archivo main
-from main import is_in_error_state, set_error_state
+# MODIFICADO: Ahora importa desde utils.py, rompiendo el círculo
+from utils import is_in_error_state, set_error_state
 
 def get_lima_time():
     """Obtiene la hora actual en la zona horaria de Lima, Perú."""
@@ -45,7 +45,6 @@ def obtener_tabla_naves():
 
     except Exception as e:
         print(f"Error al obtener la tabla de la web: {e}")
-        # MODIFICADO: Usa la nueva lógica de notificación de errores
         if not is_in_error_state():
             enviar_notificacion("‼️🚨 Error en Script de Naves", f"El script ha comenzado a fallar al obtener datos de DP World. Error: {e}", tags="x")
             set_error_state(True)
