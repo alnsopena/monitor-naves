@@ -28,11 +28,13 @@ def enviar_a_correo(titulo, mensaje):
         return
     try:
         email_msg = MIMEMultipart()
-        email_msg["From"] = config.EMAIL_ADDRESS
+        email_msg["From"] = f"Monitor de Naves <{config.EMAIL_ADDRESS}>"
         email_msg["To"] = config.EMAIL_ADDRESS
         email_msg["Subject"] = titulo
+        
         mensaje_simple = mensaje.replace('**', '').replace('➡️', '->').replace('⚓', '(En Puerto)').replace('⏳', '(Próximo)').replace('🗓️', '(Programado)')
-        cuerpo_html = f'<html><body><p><b>{titulo}</b></p><pre style="font-family: monospace; font-size: 14px;">{mensaje_simple}</pre></body></html>'
+        
+        cuerpo_html = f'<html><body><pre style="font-family: monospace; font-size: 14px;">{mensaje_simple}</pre></body></html>'
         email_msg.attach(MIMEText(cuerpo_html, "html"))
 
         context = ssl.create_default_context()
