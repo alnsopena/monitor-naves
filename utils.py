@@ -1,7 +1,7 @@
 # utils.py
-# Archivo de utilidades con funciones compartidas
-
 import json
+import pytz
+from datetime import datetime
 import config
 
 def is_in_error_state():
@@ -17,3 +17,27 @@ def set_error_state(status: bool):
     """Establece el estado de error del script."""
     with open(config.ERROR_STATE_FILE, 'w') as f:
         json.dump({"in_error_state": status}, f)
+
+def cargar_notificaciones_enviadas():
+    """Carga el registro de notificaciones de plazo ya enviadas."""
+    try:
+        with open(config.SENT_NOTIFICATIONS_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def guardar_notificaciones_enviadas(data):
+    """Guarda el registro actualizado de notificaciones enviadas."""
+    with open(config.SENT_NOTIFICATIONS_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
+
+def parse_date(date_str):
+    """Convierte un string de fecha a un objeto datetime con zona horaria."""
+    if not date_str or date_str == '---':
+        return None
+    try:
+        lima_tz = pytz.timezone('America/Lima')
+        dt = datetime.strptime(date_str, '%d-%m-%Y %H:%M:%S')
+        return lima_tz.localize(dt)
+    except (ValueError, TypeError):
+        return None
