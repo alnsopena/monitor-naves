@@ -8,17 +8,21 @@ from notifier import enviar_a_ntfy, enviar_a_correo
 from scraper import obtener_tabla_naves, get_lima_time
 from utils import is_in_error_state, set_error_state, cargar_notificaciones_enviadas, guardar_notificaciones_enviadas, parse_date
 
-def generar_y_enviar_resumen(df_zim, titulo):
+def generar_y_enviar_resumen(df_zim, titulo, cambios=None):
+    """Construye y envía el mensaje de resumen, resaltando cambios si se proveen."""
+    if cambios is None:
+        cambios = {"nuevas": [], "modificadas": {}}
+
     lima_now = get_lima_time()
     mensaje_resumen = ""
     for _, nave in df_zim.iterrows():
         nombre_nave = nave.get('VESSEL NAME', 'N/A')
         ib_vyg = pd.Series(nave.get('I/B VYG', '')).fillna('').iloc[0]
         identificador_nave = f"{nombre_nave} {ib_vyg}".strip()
-        etb_str = pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0]
-        etd_str = pd.Series(nave.get('ETD', '---')).fillna('---').iloc[0]
-        manifest_str = pd.Series(nave.get('MANIFEST', '---')).fillna('---').iloc[0]
-        etb_date = parse_date(etb_str)
+        clave_viaje = f"{nombre_nave}-{ib_vyg}"
+
+        # Determinar el estado general de la nave
+        etb_date = parse_date(pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0])
         ata_date = parse_date(pd.Series(nave.get('ATA', '---')).fillna('---').iloc[0])
         atd_date = parse_date(pd.Series(nave.get('ATD', '---')).fillna('---').iloc[0])
         status_emoji = '🗓️'
@@ -26,8 +30,22 @@ def generar_y_enviar_resumen(df_zim, titulo):
         elif ata_date and ata_date < lima_now: status_emoji = '⚓'
         elif etb_date and (etb_date - lima_now).total_seconds() <= 0: status_emoji = '⚓'
         elif etb_date and (etb_date - lima_now).total_seconds() / 3600 <= 24: status_emoji = '⏳'
-        mensaje_resumen += f"\n{status_emoji} **{identificador_nave}**\n  Manifest: {manifest_str}\n  ETB: {etb_str}\n  ETD: {etd_str}\n"
-    
+        
+        # Determinar si la nave es nueva para resaltarla
+        nave_emoji = "✨" if clave_viaje in cambios.get("nuevas", []) else status_emoji
+        
+        # Construir las líneas de datos, resaltando los campos modificados
+        lineas_datos = []
+        campos_modificados = cambios.get("modificadas", {}).get(clave_viaje, [])
+        
+        for campo in ["Manifest", "ETB", "ETD"]:
+            valor = pd.Series(nave.get(campo.upper(), '---')).fillna('---').iloc[0]
+            prefijo = "✏️ " if campo.upper() in campos_modificados else "  "
+            lineas_datos.append(f"{prefijo}{campo}: {valor}")
+        
+        datos_formateados = "\n".join(lineas_datos)
+        mensaje_resumen += f"\n{nave_emoji} **{identificador_nave}**\n{datos_formateados}\n"
+
     enviar_a_ntfy(titulo, mensaje_resumen, tags="newspaper")
     enviar_a_correo(titulo, mensaje_resumen)
     print("Resumen enviado a todos los canales.")
@@ -44,27 +62,39 @@ def revisar_cambios():
         df = obtener_tabla_naves()
         if df is None: return
         df_zim = df[df['LINE'].str.strip() == 'ZIM'].copy()
-        if df_zim.empty:
-            with open(config.DATA_FILE, 'w') as f: json.dump({}, f)
-        else:
-            hubo_cambios = False
-            datos_nuevos = {}
-            for _, nave in df_zim.iterrows():
-                clave_viaje = f"{nave['VESSEL NAME']}-{nave['I/B VYG']}"
-                datos_nuevos[clave_viaje] = {campo: pd.Series(nave.get(campo, '---')).fillna('---').iloc[0] for campo in config.CAMPOS_A_MONITORIAR}
-                if clave_viaje not in datos_viejos or datos_nuevos[clave_viaje] != datos_viejos[clave_viaje]:
-                    hubo_cambios = True
-            
-            if not hubo_cambios and set(datos_viejos.keys()) != set(datos_nuevos.keys()):
-                hubo_cambios = True
-            
-            with open(config.DATA_FILE, 'w') as f: json.dump(datos_nuevos, f, indent=4)
 
-            if hubo_cambios:
-                print("Cambios detectados. Enviando resumen actualizado...")
-                generar_y_enviar_resumen(df_zim, "📰 resumen ZIM Actualizado por Cambios")
+        datos_nuevos = {}
+        # MODIFICADO: Estructura para registrar cambios detallados
+        cambios_info = {"nuevas": [], "modificadas": {}}
+
+        for _, nave in df_zim.iterrows():
+            clave_viaje = f"{nave['VESSEL NAME']}-{nave['I/B VYG']}"
+            datos_nuevos[clave_viaje] = {campo: pd.Series(nave.get(campo, '---')).fillna('---').iloc[0] for campo in config.CAMPOS_A_MONITORIAR}
+            
+            if clave_viaje not in datos_viejos:
+                cambios_info["nuevas"].append(clave_viaje)
             else:
-                print("Revisión completada. No se detectaron cambios.")
+                campos_modificados_nave = []
+                for campo in config.CAMPOS_A_MONITORIAR:
+                    if datos_nuevos[clave_viaje].get(campo) != datos_viejos[clave_viaje].get(campo):
+                        campos_modificados_nave.append(campo)
+                if campos_modificados_nave:
+                    cambios_info["modificadas"][clave_viaje] = campos_modificados_nave
+
+        if set(datos_viejos.keys()) != set(datos_nuevos.keys()):
+             # Si las naves han sido añadidas o eliminadas, lo consideramos un cambio
+            if not cambios_info["nuevas"] and not cambios_info["modificadas"]:
+                 # Caso especial: solo se eliminaron naves
+                 cambios_info["eliminadas"] = True
+
+
+        with open(config.DATA_FILE, 'w') as f: json.dump(datos_nuevos, f, indent=4)
+
+        if cambios_info.get("nuevas") or cambios_info.get("modificadas") or cambios_info.get("eliminadas"):
+            print("Cambios detectados. Enviando resumen actualizado con resaltados...")
+            generar_y_enviar_resumen(df_zim, "📰 resumen ZIM Actualizado por Cambios", cambios=cambios_info)
+        else:
+            print("Revisión completada. No se detectaron cambios.")
         
         if is_in_error_state():
             set_error_state(False)
@@ -77,6 +107,7 @@ def revisar_cambios():
             set_error_state(True)
 
 def enviar_resumen_diario():
+    # (Esta función no cambia, pero se incluye completa para evitar errores)
     print("Generando resumen diario y alertas de plazos...")
     try:
         df = obtener_tabla_naves()
@@ -134,6 +165,7 @@ def enviar_resumen_diario():
                         notificaciones_enviadas[llave_zarpe24h] = lima_hoy_str
         
         if not df_zim.empty:
+            # El resumen diario se envía SIN resaltados
             generar_y_enviar_resumen(df_zim, "📰 resumen Diario de Naves ZIM")
         else:
             titulo_vacio = "📰 resumen Diario de Naves ZIM"
