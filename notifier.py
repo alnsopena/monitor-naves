@@ -22,25 +22,29 @@ def enviar_a_ntfy(titulo, mensaje, tags=""):
         print(f"ERROR al enviar por ntfy: {e}")
 
 def enviar_a_correo(titulo, mensaje):
-    """Envía una notificación específicamente por correo electrónico."""
+    """Envía correo a la dirección principal y a la de reenvío."""
     if not config.EMAIL_ADDRESS or not config.EMAIL_APP_PASSWORD:
         print("Advertencia: Credenciales de correo no configuradas.")
         return
+
+    destinatarios = [config.EMAIL_ADDRESS]
+    if config.EMAIL_FORWARD_ADDRESS:
+        destinatarios.append(config.EMAIL_FORWARD_ADDRESS)
+
     try:
         email_msg = MIMEMultipart()
         email_msg["From"] = f"Monitor de Naves <{config.EMAIL_ADDRESS}>"
-        email_msg["To"] = config.EMAIL_ADDRESS
+        email_msg["To"] = ", ".join(destinatarios)
         email_msg["Subject"] = titulo
         
         mensaje_simple = mensaje.replace('**', '').replace('➡️', '->').replace('⚓', '(En Puerto)').replace('⏳', '(Próximo)').replace('🗓️', '(Programado)')
-        
         cuerpo_html = f'<html><body><pre style="font-family: monospace; font-size: 14px;">{mensaje_simple}</pre></body></html>'
         email_msg.attach(MIMEText(cuerpo_html, "html"))
 
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(config.SMTP_SERVER, config.SMTP_PORT, context=context) as server:
             server.login(config.EMAIL_ADDRESS, config.EMAIL_APP_PASSWORD)
-            server.sendmail(config.EMAIL_ADDRESS, config.EMAIL_ADDRESS, email_msg.as_string())
-            print(f"Notificación enviada por correo a {config.EMAIL_ADDRESS}")
+            server.sendmail(config.EMAIL_ADDRESS, destinatarios, email_msg.as_string())
+            print(f"Notificación enviada por correo a: {', '.join(destinatarios)}")
     except Exception as e:
         print(f"ERROR al enviar por correo: {e}")
