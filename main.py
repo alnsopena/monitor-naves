@@ -17,10 +17,9 @@ def generar_y_enviar_resumen(df_zim, titulo):
         identificador_nave = f"{nombre_nave} {ib_vyg}".strip()
         etb_str = pd.Series(nave.get('ETB', '---')).fillna('---').iloc[0]
         etd_str = pd.Series(nave.get('ETD', '---')).fillna('---').iloc[0]
-        ata_str = pd.Series(nave.get('ATA', '---')).fillna('---').iloc[0]
         manifest_str = pd.Series(nave.get('MANIFEST', '---')).fillna('---').iloc[0]
         etb_date = parse_date(etb_str)
-        ata_date = parse_date(ata_str)
+        ata_date = parse_date(pd.Series(nave.get('ATA', '---')).fillna('---').iloc[0])
         atd_date = parse_date(pd.Series(nave.get('ATD', '---')).fillna('---').iloc[0])
         status_emoji = '🗓️'
         if atd_date and atd_date < lima_now: status_emoji = '➡️'
