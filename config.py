@@ -5,6 +5,7 @@ URL = "https://naves.dpworldcallao.com.pe/programacion/"
 DATA_FILE = "etb_data.json"
 SENT_NOTIFICATIONS_FILE = "sent_notifications.json"
 ERROR_STATE_FILE = "error_state.json"
+RATE_LIMIT_FILE = "rate_limit_state.json"
 
 # --- CONFIGURACIÓN DE CORREO ---
 SMTP_SERVER = "smtp.gmail.com"
