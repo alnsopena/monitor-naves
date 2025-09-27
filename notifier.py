@@ -26,7 +26,7 @@ def enviar_a_correo(titulo, mensaje):
     if not config.EMAIL_ADDRESS or not config.EMAIL_APP_PASSWORD:
         print("Advertencia: Credenciales de correo no configuradas.")
         return
-
+    
     destinatarios = [config.EMAIL_ADDRESS]
     if config.EMAIL_FORWARD_ADDRESS:
         destinatarios.append(config.EMAIL_FORWARD_ADDRESS)
