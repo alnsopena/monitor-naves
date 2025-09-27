@@ -9,7 +9,8 @@ jobs:
   monitor_job:
     name: Monitorear Naves
     runs-on: ubuntu-latest
-    permissions: write-all
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout del repositorio
@@ -19,20 +20,18 @@ jobs:
         with:
           python-version: '3.10'
       - name: Instalar dependencias desde requirements.txt
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
       - name: Ejecutar script principal
         env:
-          # MODIFICADO: Pasa los TRES secretos al script
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
           EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          EMAIL_FORWARD_ADDRESS: ${{ secrets.EMAIL_FORWARD_ADDRESS }}
         run: python main.py
       - name: Guardar los cambios en el archivo de datos
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add . # Guarda cambios en todos los archivos de datos
+          git add .
           git diff --staged --quiet || git commit -m "Actualizar datos de estado"
           git push
